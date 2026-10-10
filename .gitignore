@@ -1,0 +1,9 @@
+# Go build output
+/laterr
+/dist/
+*.test
+*.out
+
+# Local development state
+.claude/
+.serena/cache/
