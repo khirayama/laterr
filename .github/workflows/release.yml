@@ -1,0 +1,42 @@
+name: Release
+
+# Pushing a tag such as v0.1.0 builds the binaries and publishes a GitHub
+# release with them.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Test
+        run: go test -count=1 ./...
+      - name: Build
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          mkdir dist
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            os=${target%/*} arch=${target#*/}
+            name=laterr_${version}_${os}_${arch}
+            mkdir "build-$name"
+            GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=$version" \
+              -o "build-$name/laterr" ./cmd/laterr
+            cp README.md LICENSE "build-$name/"
+            tar -czf "dist/$name.tar.gz" -C "build-$name" laterr README.md LICENSE
+          done
+          cd dist && sha256sum *.tar.gz > checksums.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
