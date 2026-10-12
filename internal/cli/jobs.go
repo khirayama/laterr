@@ -159,6 +159,80 @@ func (a *app) show(args []string) error {
 	return nil
 }
 
+// startWait is how long `laterr run` waits for the scheduler to start the job.
+const startWait = 5 * time.Second
+
+func (a *app) runNow(args []string) error {
+	_, positional, err := parseArgs("run", args)
+	if err != nil {
+		return err
+	}
+	if len(positional) == 0 {
+		return usagef("usage: laterr run <id>...")
+	}
+	// Check every ID before touching anything, so that a typo starts nothing.
+	ids := make([]int64, len(positional))
+	for i, arg := range positional {
+		if ids[i], err = parseID(arg); err != nil {
+			return err
+		}
+	}
+	failed := false
+	for _, id := range ids {
+		if err := a.start(id); err != nil {
+			failed = true
+			fmt.Fprintf(a.stderr, "Error: %v\n", err)
+			continue
+		}
+		fmt.Fprintf(a.stdout, "✓ Started job #%d\n", id)
+	}
+	if failed {
+		return errSilent
+	}
+	return nil
+}
+
+func (a *app) start(id int64) error {
+	p, st, _, err := getJob(id)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	// The scheduler starts the job, as it would have later. Without one the
+	// job would be due and stay that way, so look for it first.
+	if _, _, err := ensureScheduler(p); err != nil {
+		return err
+	}
+	// Only pending jobs can be started, and the update is conditional on the
+	// status: a job that was just cancelled stays cancelled, and one the
+	// scheduler has just started does not run twice.
+	if err := st.RunNow(id, time.Now()); err != nil {
+		var se *store.StateError
+		if errors.As(err, &se) {
+			if se.Status == store.Running {
+				return fmt.Errorf("job #%d is already running", id)
+			}
+			return fmt.Errorf("job #%d cannot be run (it %s)", id, pastTense(se.Status))
+		}
+		return err
+	}
+	if err := scheduler.Wake(p.Socket); err != nil {
+		return err
+	}
+	var j store.Job
+	started := waitFor(startWait, func() bool {
+		j, err = st.Get(id)
+		return err != nil || j.Status != store.Pending
+	})
+	if err != nil {
+		return err
+	}
+	if !started {
+		return fmt.Errorf("job #%d is due now but has not started (see `laterr doctor`)", id)
+	}
+	return nil
+}
+
 func (a *app) remove(args []string) error {
 	_, positional, err := parseArgs("rm", args)
 	if err != nil {

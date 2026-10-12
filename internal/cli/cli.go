@@ -25,12 +25,14 @@ Usage:
   laterr [options] <time> -- <command> [args...]
   laterr ls [--all] [--json]       List jobs (pending and running by default)
   laterr show <id>                 Show the details of a job
+  laterr run <id>...               Run pending jobs now instead of later
   laterr rm <id>...                Cancel pending jobs
   laterr kill <id>                 Stop a running job
   laterr log <id> [--follow]       Print the output of a job
   laterr prune [--older-than <duration> | --all]
                                    Delete finished jobs and their logs
                                    (default: finished more than 30d ago)
+  laterr menubar [on|off]          Show jobs in the macOS menu bar (default on)
   laterr doctor                    Check that laterr is set up correctly
   laterr uninstall [--purge]       Remove the background service (and data)
 
@@ -47,7 +49,7 @@ Options:
   --bg                 Do not print the output in this terminal; read it with
                        "laterr log <id>" instead
   --remind <duration>  How long before it runs to announce the job in this
-                       terminal (default 5s)
+                       terminal (default 10s)
   --no-remind          Do not announce the job
   --version            Print the version
   --help               Print this help
@@ -118,6 +120,8 @@ func (a *app) dispatch(args []string) error {
 		return a.list(rest)
 	case "show":
 		return a.show(rest)
+	case "run":
+		return a.runNow(rest)
 	case "rm":
 		return a.remove(rest)
 	case "kill":
@@ -130,8 +134,12 @@ func (a *app) dispatch(args []string) error {
 		return a.doctor(rest)
 	case "uninstall":
 		return a.uninstall(rest)
+	case "menubar":
+		return a.menubar(rest)
 	case "daemon":
 		return a.daemon(rest)
+	case menubarCmd:
+		return a.menubarIcon(rest)
 	case followCmd:
 		return a.follow(rest)
 	}
