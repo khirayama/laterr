@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,20 @@ func hasTerminal() bool {
 	}
 	f.Close()
 	return true
+}
+
+// terminalSize returns the columns and rows of the terminal w writes to, or
+// zeros if it is not one.
+func terminalSize(w io.Writer) (cols, rows int) {
+	f, ok := w.(*os.File)
+	if !ok {
+		return 0, 0
+	}
+	ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
+	if err != nil {
+		return 0, 0
+	}
+	return int(ws.Col), int(ws.Row)
 }
 
 // parentGroup returns the process group of the process that started laterr,
@@ -60,6 +75,19 @@ func atPrompt(shell int) bool {
 	}
 	sid, err := unix.Getsid(0)
 	return err == nil && fg == sid
+}
+
+// joinPrompt moves this process into the process group that owns the terminal,
+// if the terminal is at a prompt (see atPrompt) and it is not there already.
+// Ctrl-C is delivered to that group only, which is the shell's while it shows
+// its prompt, and the follower is otherwise in a background group that never
+// hears of it.
+func joinPrompt(shell int) {
+	fg := foregroundGroup()
+	if fg == 0 || fg == syscall.Getpgrp() || !atPrompt(shell) {
+		return
+	}
+	syscall.Setpgid(0, fg)
 }
 
 // redrawPrompt gets the shell to draw its prompt again. The follower writes

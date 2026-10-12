@@ -50,11 +50,12 @@ func TestCreateAndGet(t *testing.T) {
 	j, err := s.Create(NewJob{
 		Argv: argv, Cwd: "/tmp/my app", Env: env,
 		CreatedAt: t0, ScheduledAt: t0.Add(90 * time.Second), Grace: 24 * time.Hour,
+		TTYCols: 120, TTYRows: 40,
 	}, logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.ID != 1 || j.Status != Pending || j.LogPath != "/logs/1.log" {
+	if j.ID != 1 || j.Status != Pending || j.LogPath != "/logs/1.log" || j.TTYCols != 120 || j.TTYRows != 40 {
 		t.Errorf("unexpected job: %+v", j)
 	}
 	if !reflect.DeepEqual(j.Argv, argv) || j.Cwd != "/tmp/my app" {
@@ -173,6 +174,21 @@ func TestTransitions(t *testing.T) {
 	if j, _ := s.Get(c.ID); j.Status != Cancelled || !j.StartedAt.IsZero() {
 		t.Errorf("cancelled job: %+v", j)
 	}
+
+	// pending -> pending, due now
+	e := add(t, s, t0.Add(time.Hour), time.Hour)
+	if err := s.RunNow(e.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if j, _ := s.Get(e.ID); j.Status != Pending || !j.ScheduledAt.Equal(now) {
+		t.Errorf("job made due: %+v", j)
+	}
+	if due, _ := s.Due(now); len(due) != 1 || due[0].ID != e.ID {
+		t.Errorf("due after RunNow: %+v", due)
+	}
+	s.MarkRunning(e.ID, now)
+	wantState(s.RunNow(e.ID, now), Running)
+	wantState(s.RunNow(c.ID, now), Cancelled)
 
 	// pending -> missed
 	d := add(t, s, t0, time.Hour)
@@ -298,6 +314,19 @@ func TestMigration(t *testing.T) {
 	var version int
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
 		t.Errorf("user_version = %d, %v", version, err)
+	}
+	s.Close()
+
+	// A database from version 1, before jobs could have a terminal.
+	raw(`ALTER TABLE jobs DROP COLUMN tty_cols`, `ALTER TABLE jobs DROP COLUMN tty_rows`, `PRAGMA user_version = 1`)
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := s.Get(2); err != nil || j.TTYCols != 0 || j.TTYRows != 0 {
+		t.Errorf("job from version 1: %+v, %v", j, err)
+	}
+	if j, err := s.Create(NewJob{Argv: []string{"true"}, Cwd: "/", CreatedAt: t0, ScheduledAt: t0, TTYCols: 80, TTYRows: 24}, logPath); err != nil || j.TTYCols != 80 || j.TTYRows != 24 {
+		t.Errorf("new job after the migration: %+v, %v", j, err)
 	}
 	s.Close()
 

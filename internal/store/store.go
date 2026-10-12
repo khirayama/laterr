@@ -43,6 +43,10 @@ type Job struct {
 	ExitCode     *int // nil if the process did not exit normally
 	ErrorMessage string
 	LogPath      string
+	// TTYCols and TTYRows are the size of the terminal the job was scheduled
+	// from, if its output is shown there. The job then runs on a terminal of
+	// that size instead of writing straight to its log. Zero otherwise.
+	TTYCols, TTYRows int
 }
 
 // Deadline is the last moment at which the job may still be started.
@@ -58,6 +62,8 @@ type NewJob struct {
 	CreatedAt   time.Time
 	ScheduledAt time.Time
 	Grace       time.Duration
+	TTYCols     int
+	TTYRows     int
 }
 
 // ErrNotFound is returned when no job has the given ID.
@@ -82,7 +88,7 @@ type Store struct {
 
 // schemaVersion is stored in the database as PRAGMA user_version. Raise it
 // and add a step to migrate whenever the schema changes.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // ErrNewerSchema is returned when the database was written by a later version
 // of laterr than this one.
@@ -107,7 +113,9 @@ CREATE TABLE IF NOT EXISTS jobs (
 	pid           INTEGER,
 	exit_code     INTEGER,
 	error_message TEXT    NOT NULL DEFAULT '',
-	log_path      TEXT    NOT NULL DEFAULT ''
+	log_path      TEXT    NOT NULL DEFAULT '',
+	tty_cols      INTEGER NOT NULL DEFAULT 0,
+	tty_rows      INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS jobs_status_scheduled_at ON jobs (status, scheduled_at);
 `
@@ -172,6 +180,14 @@ func migrate(db *sql.DB) error {
 		if _, err := tx.Exec(`UPDATE jobs SET env = ? WHERE status NOT IN (?, ?)`, noEnv, Pending, Running); err != nil {
 			return err
 		}
+	} else if version < 2 {
+		// Version 2 added the terminal size. A database created above already
+		// has it.
+		for _, col := range []string{"tty_cols", "tty_rows"} {
+			if _, err := tx.Exec(`ALTER TABLE jobs ADD COLUMN ` + col + ` INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
 		return err
@@ -203,9 +219,10 @@ func (s *Store) Create(n NewJob, logPath func(id int64) string) (Job, error) {
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(
-		`INSERT INTO jobs (argv, cwd, env, created_at, scheduled_at, grace_seconds, status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		string(argv), n.Cwd, string(env), ms(n.CreatedAt), ms(n.ScheduledAt), int64(n.Grace/time.Second), Pending)
+		`INSERT INTO jobs (argv, cwd, env, created_at, scheduled_at, grace_seconds, status, tty_cols, tty_rows)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(argv), n.Cwd, string(env), ms(n.CreatedAt), ms(n.ScheduledAt), int64(n.Grace/time.Second), Pending,
+		n.TTYCols, n.TTYRows)
 	if err != nil {
 		return Job{}, err
 	}
@@ -223,7 +240,7 @@ func (s *Store) Create(n NewJob, logPath func(id int64) string) (Job, error) {
 }
 
 const jobColumns = `id, argv, cwd, created_at, scheduled_at, grace_seconds, started_at, finished_at,
-	status, pid, exit_code, error_message, log_path`
+	status, pid, exit_code, error_message, log_path, tty_cols, tty_rows`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -238,7 +255,7 @@ func scanJob(row scanner) (Job, error) {
 		pid, exitCode             sql.NullInt64
 	)
 	err := row.Scan(&j.ID, &argv, &j.Cwd, &created, &scheduled, &grace, &started, &finished,
-		&j.Status, &pid, &exitCode, &j.ErrorMessage, &j.LogPath)
+		&j.Status, &pid, &exitCode, &j.ErrorMessage, &j.LogPath, &j.TTYCols, &j.TTYRows)
 	if err != nil {
 		return Job{}, err
 	}
@@ -367,6 +384,12 @@ func (s *Store) transition(id int64, from Status, set string, args ...any) error
 // Cancel moves a pending job to cancelled.
 func (s *Store) Cancel(id int64, now time.Time) error {
 	return s.transition(id, Pending, `status = ?, finished_at = ?, env = ?`, Cancelled, ms(now), noEnv)
+}
+
+// RunNow makes a pending job due at now instead of at its scheduled time. It
+// stays pending: the scheduler starts it, as it does any job that is due.
+func (s *Store) RunNow(id int64, now time.Time) error {
+	return s.transition(id, Pending, `scheduled_at = ?`, ms(now))
 }
 
 // MarkMissed moves a pending job to missed.

@@ -14,14 +14,21 @@ import (
 // one JSON response line, then the connection is closed.
 
 type request struct {
-	Op string `json:"op"`           // one of the op constants
-	ID int64  `json:"id,omitempty"` // the job, for opKill
+	Op   string `json:"op"`             // one of the op constants
+	ID   int64  `json:"id,omitempty"`   // the job, for opKill and opResize
+	Cols int    `json:"cols,omitempty"` // the new size, for opResize
+	Rows int    `json:"rows,omitempty"`
+	// Interrupt says an opKill comes from Ctrl-C in the terminal showing the
+	// job rather than from `laterr kill`. Only the recorded reason differs.
+	Interrupt bool `json:"interrupt,omitempty"`
 }
 
 const (
 	opPing = "ping" // answer with Info and nothing else
 	opWake = "wake" // jobs were added or cancelled: look at the schedule again
 	opKill = "kill" // stop a running job
+
+	opResize = "resize" // the terminal showing a running job changed size
 )
 
 // ioTimeout bounds one exchange, on either side of the socket.
@@ -77,7 +84,16 @@ func Wake(socket string) error {
 // Kill asks the scheduler to stop a running job. It returns once the job has
 // been signalled, not once it has exited.
 func Kill(socket string, id int64) error {
-	resp, err := call(socket, request{Op: opKill, ID: id})
+	return kill(socket, request{Op: opKill, ID: id})
+}
+
+// Interrupt is Kill for a job stopped with Ctrl-C in the terminal showing it.
+func Interrupt(socket string, id int64) error {
+	return kill(socket, request{Op: opKill, ID: id, Interrupt: true})
+}
+
+func kill(socket string, req request) error {
+	resp, err := call(socket, req)
 	if err != nil {
 		return err
 	}
@@ -86,6 +102,18 @@ func Kill(socket string, id int64) error {
 	}
 	if !resp.Killed {
 		return fmt.Errorf("the running scheduler (version %s) is too old to stop jobs; restart it first (see `laterr doctor`)", resp.Version)
+	}
+	return nil
+}
+
+// Resize tells the scheduler that the terminal showing a job is now cols by
+// rows, so that the job's own terminal follows. The only error is the job not
+// running, which may just mean not yet; a job without a terminal, or a
+// scheduler that cannot be told, is not one.
+func Resize(socket string, id int64, cols, rows int) error {
+	resp, err := call(socket, request{Op: opResize, ID: id, Cols: cols, Rows: rows})
+	if err == nil && resp.Error != "" {
+		return errors.New(resp.Error)
 	}
 	return nil
 }
@@ -134,10 +162,18 @@ func (s *scheduler) handle(conn net.Conn) {
 	case opWake:
 		s.notify()
 	case opKill:
-		if err := s.kill(req.ID); err != nil {
+		msg := killedMsg
+		if req.Interrupt {
+			msg = interruptMsg
+		}
+		if err := s.kill(req.ID, msg); err != nil {
 			resp.Error = err.Error()
 		} else {
 			resp.Killed = true
+		}
+	case opResize:
+		if err := s.resize(req.ID, req.Cols, req.Rows); err != nil {
+			resp.Error = err.Error()
 		}
 	}
 	json.NewEncoder(conn).Encode(resp)

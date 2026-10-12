@@ -18,7 +18,7 @@ import (
 
 const (
 	defaultGrace  = 24 * time.Hour
-	defaultRemind = 5 * time.Second
+	defaultRemind = 10 * time.Second
 )
 
 type scheduleArgs struct {
@@ -172,9 +172,18 @@ func (a *app) schedule(args []string) error {
 		return err
 	}
 	defer st.Close()
+	// Output goes to this terminal only if there is one to come back to. The
+	// job then runs on a terminal of the same size, so that what it draws
+	// fits here.
+	attach := !sa.bg && interactive(a.stdout)
+	var cols, rows int
+	if attach {
+		cols, rows = terminalSize(a.stdout)
+	}
 	job, err := st.Create(store.NewJob{
 		Argv: sa.argv, Cwd: cwd, Env: env,
 		CreatedAt: now, ScheduledAt: at, Grace: sa.grace,
+		TTYCols: cols, TTYRows: rows,
 	}, p.LogFile)
 	if err != nil {
 		return err
@@ -186,8 +195,6 @@ func (a *app) schedule(args []string) error {
 		return err
 	}
 
-	// Output goes to this terminal only if there is one to come back to.
-	attach := !sa.bg && interactive(a.stdout)
 	a.printScheduled(job, now, len(env), sa.noEnv, attach, installed)
 	if attach {
 		if err := spawnFollower(job.ID, sa.remind); err != nil {

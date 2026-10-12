@@ -12,7 +12,7 @@ func TestParseSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := scheduleArgs{timeExpr: "+10m", grace: 90 * time.Minute, remind: 5 * time.Second, noEnv: true, argv: []string{"sh", "-c", "echo hi", "--", "--grace"}}
+	want := scheduleArgs{timeExpr: "+10m", grace: 90 * time.Minute, remind: 10 * time.Second, noEnv: true, argv: []string{"sh", "-c", "echo hi", "--", "--grace"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
@@ -27,9 +27,9 @@ func TestParseSchedule(t *testing.T) {
 		t.Errorf("got %+v, %v", got, err)
 	}
 
-	// Reminders: 5 seconds by default, adjustable, and off without a terminal.
+	// Reminders: 10 seconds by default, adjustable, and off without a terminal.
 	for args, want := range map[string]time.Duration{
-		"+1h -- ls":                  5 * time.Second,
+		"+1h -- ls":                  10 * time.Second,
 		"--remind 1m +1h -- ls":      time.Minute,
 		"--remind=30s +1h -- ls":     30 * time.Second,
 		"--no-remind +1h -- ls":      0,

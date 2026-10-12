@@ -31,6 +31,7 @@ const stopGrace = 5 * time.Second
 const (
 	interruptedMsg = "the scheduler stopped while this job was running"
 	killedMsg      = "stopped with `laterr kill`"
+	interruptMsg   = "stopped with Ctrl-C"
 )
 
 type scheduler struct {
@@ -43,11 +44,14 @@ type scheduler struct {
 	running  map[int64]*runningJob
 	stopping bool
 	wg       sync.WaitGroup // one per running job
+
+	menu menuBar
 }
 
 type runningJob struct {
 	cmd    *exec.Cmd
-	killed bool // stopped on request, with `laterr kill`
+	out    *output
+	killed string // why, if it was stopped on request: killedMsg or interruptMsg
 }
 
 // signal sends sig to the job and everything it started. Each job leads its
@@ -81,6 +85,7 @@ func Run(ctx context.Context, p paths.Paths, version string) error {
 	defer st.Close()
 
 	s := &scheduler{
+		menu:    menuBar{paths: p},
 		store:   st,
 		version: version,
 		log:     log.New(os.Stderr, "", log.LstdFlags),
@@ -110,6 +115,7 @@ func Run(ctx context.Context, p paths.Paths, version string) error {
 	s.log.Printf("scheduler %s started (pid %d)", version, os.Getpid())
 	for {
 		s.startDue()
+		s.showMenuBar()
 
 		// With nothing pending the timer channel stays nil and the select
 		// blocks until a notification arrives.
@@ -124,6 +130,7 @@ func Run(ctx context.Context, p paths.Paths, version string) error {
 
 		select {
 		case <-ctx.Done():
+			s.menu.stop()
 			s.shutdown()
 			s.log.Printf("scheduler stopped")
 			return nil
@@ -189,13 +196,13 @@ func (s *scheduler) start(j store.Job) {
 		fail(err)
 		return
 	}
-	cmd, logFile, err := prepare(j, env)
+	cmd, out, err := prepare(j, env)
 	if err != nil {
 		fail(err)
 		return
 	}
 
-	r := &runningJob{cmd: cmd}
+	r := &runningJob{cmd: cmd, out: out}
 	s.mu.Lock()
 	err = cmd.Start()
 	if err == nil {
@@ -204,10 +211,11 @@ func (s *scheduler) start(j store.Job) {
 	}
 	s.mu.Unlock()
 	if err != nil {
-		logFile.Close()
+		out.close()
 		fail(fmt.Errorf("cannot start %s: %w", j.Argv[0], unwrapPathError(err)))
 		return
 	}
+	out.started()
 	if err := s.store.SetPID(j.ID, cmd.Process.Pid); err != nil {
 		s.log.Printf("job #%d: %v", j.ID, err)
 	}
@@ -216,7 +224,7 @@ func (s *scheduler) start(j store.Job) {
 	go func() {
 		defer s.wg.Done()
 		err := cmd.Wait()
-		logFile.Close()
+		out.close()
 
 		s.mu.Lock()
 		delete(s.running, j.ID)
@@ -228,20 +236,21 @@ func (s *scheduler) start(j store.Job) {
 		case status == store.Succeeded:
 		case stopping:
 			status, code, msg = store.Interrupted, nil, interruptedMsg
-		case killed:
-			msg = killedMsg
+		case killed != "":
+			msg = killed
 		}
 		s.finish(j.ID, status, code, msg)
 	}()
 }
 
 // kill stops a running job on request: SIGTERM first, SIGKILL if it is still
-// there after stopGrace. The job is recorded as failed when it exits.
-func (s *scheduler) kill(id int64) error {
+// there after stopGrace. The job is recorded as failed, with msg as the
+// reason, when it exits.
+func (s *scheduler) kill(id int64, msg string) error {
 	s.mu.Lock()
 	r, ok := s.running[id]
 	if ok {
-		r.killed = true
+		r.killed = msg
 		r.signal(syscall.SIGTERM)
 	}
 	s.mu.Unlock()
@@ -256,6 +265,21 @@ func (s *scheduler) kill(id int64) error {
 			r.signal(syscall.SIGKILL)
 		}
 	})
+	return nil
+}
+
+// resize gives a running job's terminal a new size and tells the job, as the
+// kernel would if that were its controlling terminal.
+func (s *scheduler) resize(id int64, cols, rows int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.running[id]
+	if !ok {
+		return fmt.Errorf("job #%d is not running", id)
+	}
+	if r.out.resize(cols, rows) {
+		r.signal(syscall.SIGWINCH)
+	}
 	return nil
 }
 

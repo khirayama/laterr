@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 var binary string
@@ -339,6 +341,39 @@ func TestCancel(t *testing.T) {
 	if j := s.job(1); j.Status != "cancelled" || j.StartedAt != nil {
 		t.Errorf("job 1: %+v", j)
 	}
+}
+
+func TestRunNow(t *testing.T) {
+	s := newSandbox(t)
+	s.startDaemon()
+
+	s.ok("+1h", "--", "sh", "-c", "echo early")
+	s.ok("+1h", "--", "true")
+	s.ok("+1h", "--", "true")
+	s.ok("rm", "3")
+	// A bad ID starts nothing.
+	if _, _, code := s.run("run", "1", "x"); code == 0 || s.job(1).Status != "pending" {
+		t.Errorf("run with an invalid ID: exit %d, job 1 %s", code, s.job(1).Status)
+	}
+	before := time.Now()
+	if out := s.ok("run", "1"); out != "✓ Started job #1\n" {
+		t.Errorf("run 1: %q", out)
+	}
+	j := s.wait(1, "succeeded")
+	if got := s.readLog(j); got != "early\n" {
+		t.Errorf("log: %q", got)
+	}
+	// It ran now, and is recorded as having been scheduled for now.
+	if at := j.ScheduledAt; at.Before(before.Add(-time.Second)) || at.After(time.Now()) {
+		t.Errorf("scheduled_at: %s", at)
+	}
+	// Each job is handled on its own; any failure makes the exit code non-zero.
+	out, errOut, code := s.run("run", "1", "2", "3", "9")
+	if code == 0 || out != "✓ Started job #2\n" ||
+		errOut != "Error: job #1 cannot be run (it has succeeded)\nError: job #3 cannot be run (it was cancelled)\nError: job #9 does not exist\n" {
+		t.Errorf("run 1 2 3 9: exit %d, %q, %q", code, out, errOut)
+	}
+	s.wait(2, "succeeded")
 }
 
 func TestLongJobDoesNotDelayOthersAndStopsWithScheduler(t *testing.T) {
@@ -703,7 +738,7 @@ func TestFollower(t *testing.T) {
 	if code != 0 || stdout != "out\nerr\nlate\n" {
 		t.Errorf("follower: exit %d, stdout %q", code, stdout)
 	}
-	if want := "laterr: job #1 (sh -c 'echo out; echo err >&2; sleep 1; echo late; exit 3') runs in 2 seconds\nlaterr: job #1 failed (exit code 3)\n"; stderr != want {
+	if want := "laterr: job #1 (sh -c 'echo out; echo err >&2; sleep 1; echo late; exit 3') runs in 2 seconds (cancel: laterr rm 1)\nlaterr: job #1 failed (exit code 3)\n"; stderr != want {
 		t.Errorf("follower stderr:\n got %q\nwant %q", stderr, want)
 	}
 	if d := time.Since(start); d < 3*time.Second {
@@ -744,4 +779,154 @@ func TestFollower(t *testing.T) {
 	if _, errOut, code := s.run("--remind", "10x", "+1h", "--", "true"); code == 0 || errOut != "Error: invalid duration for --remind: 10x\n" {
 		t.Errorf("--remind 10x: exit %d, %q", code, errOut)
 	}
+}
+
+// terminal is a terminal the CLI was run on.
+type terminal struct {
+	t   *testing.T
+	tty *os.File
+
+	mu     sync.Mutex
+	screen bytes.Buffer
+}
+
+// onTerminal runs the CLI on a terminal of its own. A shell runs it and then
+// stays, as an interactive one would: the terminal lasts only as long as its
+// session leader.
+func (s *sandbox) onTerminal(cols, rows uint16, args ...string) *terminal {
+	s.t.Helper()
+	// Like an interactive shell, it survives Ctrl-C.
+	cmd := exec.Command("sh", append([]string{"-c", `trap : INT; "$@"; while :; do sleep 1; done`, "sh", binary}, args...)...)
+	cmd.Dir = s.work
+	cmd.Env = s.env()
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	term := &terminal{t: s.t, tty: tty}
+	s.t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		tty.Close()
+	})
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := tty.Read(buf)
+			term.mu.Lock()
+			term.screen.Write(buf[:n])
+			term.mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return term
+}
+
+// waitFor returns everything that appeared on the terminal by the time want
+// did.
+func (term *terminal) waitFor(want string) string {
+	term.t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		term.mu.Lock()
+		got := term.screen.String()
+		term.mu.Unlock()
+		if strings.Contains(got, want) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			term.t.Fatalf("%q did not appear on the terminal:\n%s", want, got)
+		}
+	}
+}
+
+// A job whose output is shown in a terminal runs on a terminal itself, of the
+// same size, so that it draws what it would when run by hand.
+func TestJobTerminal(t *testing.T) {
+	s := newSandbox(t)
+	s.startDaemon()
+
+	// stdin is still /dev/null. The carriage return is what a progress bar
+	// redraws its line with.
+	script := `test -t 1 && test -t 2 && ! test -t 0 && stty size <&1; printf '10%%\r100%%\n'`
+	screen := s.onTerminal(97, 31, "--no-remind", "+1s", "--", "sh", "-c", script).waitFor("job #1 succeeded")
+	contains(t, "terminal", screen, "shown here while this terminal is open", "31 97\r\n10%\r100%\r\n")
+	// The log holds what the job wrote, without the terminal's line endings.
+	if got := s.readLog(s.job(1)); got != "31 97\n10%\r100%\n" {
+		t.Errorf("log: %q", got)
+	}
+
+	// Nothing is lost between a job that exits at once and its log.
+	s.onTerminal(80, 24, "--no-remind", "+1s", "--", "seq", "1", "50000").waitFor("job #2 succeeded")
+	var want strings.Builder
+	for i := 1; i <= 50000; i++ {
+		fmt.Fprintln(&want, i)
+	}
+	if got := s.readLog(s.job(2)); got != want.String() {
+		t.Errorf("log: %d bytes, want %d", len(got), want.Len())
+	}
+
+	// Something the job leaves running does not hold it up.
+	s.onTerminal(80, 24, "--no-remind", "+1s", "--", "sh", "-c", "sleep 30 & echo started").waitFor("job #3 succeeded")
+	if j := s.job(3); j.FinishedAt.Sub(*j.StartedAt) > 5*time.Second {
+		t.Errorf("job waited for what it left behind: %v", j.FinishedAt.Sub(*j.StartedAt))
+	}
+
+	// The job's terminal follows the size of the one it is shown in, and the
+	// job is told, as it would be when run by hand.
+	script = `trap 'stty size <&1; exit' WINCH; echo ready; while :; do sleep 0.1; done`
+	term := s.onTerminal(80, 24, "--no-remind", "+1s", "--", "sh", "-c", script)
+	term.waitFor("ready")
+	if err := pty.Setsize(term.tty, &pty.Winsize{Cols: 132, Rows: 43}); err != nil {
+		t.Fatal(err)
+	}
+	term.waitFor("job #4 succeeded")
+	if got := s.readLog(s.job(4)); got != "ready\n43 132\n" {
+		t.Errorf("log: %q", got)
+	}
+
+	// Without a terminal to show it in, output goes straight to the log.
+	s.ok("+1s", "--", "sh", "-c", "test -t 1 || echo plain")
+	if got := s.readLog(s.wait(5, "succeeded")); got != "plain\n" {
+		t.Errorf("log: %q", got)
+	}
+}
+
+// Ctrl-C at the prompt of the terminal showing a job stops the job, but only
+// when pressed twice: once is how a half-typed line is thrown away.
+func TestInterrupt(t *testing.T) {
+	s := newSandbox(t)
+	s.startDaemon()
+	ctrlC := func(term *terminal) {
+		t.Helper()
+		if _, err := term.tty.Write([]byte{3}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	term := s.onTerminal(80, 24, "--no-remind", "+2s", "--", "sh", "-c", "echo started; sleep 60")
+	// Before the job runs, Ctrl-C is none of the follower's business.
+	term.waitFor("Scheduled job #1")
+	ctrlC(term)
+	term.waitFor("started\r\n")
+	ctrlC(term)
+	term.waitFor("job #1 (sh -c 'echo started; sleep 60') is running; press Ctrl-C again to stop it")
+	if j := s.job(1); j.Status != "running" {
+		t.Fatalf("job 1 after one Ctrl-C: %s", j.Status)
+	}
+	ctrlC(term)
+	term.waitFor("job #1 failed: stopped with Ctrl-C")
+	if j := s.job(1); j.Status != "failed" || j.ErrorMessage == nil || *j.ErrorMessage != "stopped with Ctrl-C" {
+		t.Errorf("job 1 after two Ctrl-C: %+v", j)
+	}
+
+	// A second press that comes too late is a first one again.
+	term = s.onTerminal(80, 24, "--no-remind", "+1s", "--", "sh", "-c", "echo started; sleep 5")
+	term.waitFor("started\r\n")
+	ctrlC(term)
+	term.waitFor("press Ctrl-C again")
+	time.Sleep(3500 * time.Millisecond)
+	ctrlC(term)
+	term.waitFor("job #2 succeeded")
 }
