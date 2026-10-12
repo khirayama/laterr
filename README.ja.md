@@ -22,7 +22,7 @@ $ laterr +10m -- npm install
 
   Runs even after this terminal is closed. Stops if you log out mid-run.
 $                                                  # そのまま作業を続ける...
-laterr: job #42 (npm install) runs in 5 seconds    # ...10分後
+laterr: job #42 (npm install) runs in 10 seconds (cancel: laterr rm 42)    # ...10分後
 added 312 packages in 8s
 laterr: job #42 succeeded (8.2s)
 ```
@@ -43,6 +43,8 @@ laterr: job #42 succeeded (8.2s)
 - **同じ実行コンテキスト**: 予約したときのディレクトリと環境変数で実行される
 - **ジョブ管理**: 一覧・キャンセル・停止・詳細表示。stdout、stderr、終了
   コードを保存する
+- **macOSではメニューバーにも表示**: 待機中・実行中のジョブがある間、
+  アイコンに件数が表示され、そこからキャンセルや停止もできる
 - **root不要、cron不要、`at` 不要**: ユーザー単位の小さな常駐サービスが実行
   を担い、初回利用時に自動でセットアップされる
 - **macOS / Linux対応**。ランタイム依存のない単一の静的バイナリ
@@ -121,6 +123,7 @@ laterr @tomorrow/09:00 -- ./backup.sh      # 明日の朝
 laterr ls                                  # 待機中・実行中のジョブ
 laterr log 1                               # ジョブ1の出力
 laterr show 1                              # ステータス、時刻、終了コード
+laterr run 2                               # ジョブ2を予定を待たず今すぐ実行する
 laterr rm 2                                # ジョブ2をキャンセルする
 laterr kill 3                              # 実行中のジョブ3を停止する
 laterr prune                               # 終了から30日を超えたジョブを消す
@@ -171,10 +174,12 @@ laterr prune                               # 終了から30日を超えたジョ
 | [`laterr [options] <time> -- <command> [args...]`](#laterr-options-time----command-args) | コマンドを予約する |
 | [`laterr ls [--all] [--json]`](#laterr-ls---all---json) | ジョブを一覧する |
 | [`laterr show <id>`](#laterr-show-id) | ジョブの詳細を表示する |
+| [`laterr run <id>...`](#laterr-run-id) | pendingのジョブを今すぐ実行する |
 | [`laterr rm <id>...`](#laterr-rm-id) | pendingのジョブをキャンセルする |
 | [`laterr kill <id>`](#laterr-kill-id) | runningのジョブを停止する |
 | [`laterr log <id> [--follow]`](#laterr-log-id---follow) | ジョブの出力を表示する |
 | [`laterr prune [--older-than <duration> \| --all]`](#laterr-prune---older-than-duration----all) | 終了済みのジョブとログを削除する |
+| [`laterr menubar [on\|off]`](#laterr-menubar-onoff) | macOSのメニューバーにジョブを表示する |
 | [`laterr doctor`](#laterr-doctor) | セットアップが正しいか診断する |
 | [`laterr uninstall [--purge]`](#laterr-uninstall---purge) | 常駐サービス(とデータ)を削除する |
 | `laterr --help`、`laterr --version` | ヘルプ、バージョンを表示する |
@@ -191,7 +196,7 @@ laterr prune                               # 終了から30日を超えたジョ
 | `--grace <duration>` | 予定時刻からこの時間を超えて遅れる場合は実行しない。デフォルトは `24h`。書式は相対指定から `+` を除いたもの(例: `10m`、`1h30m`)。 |
 | `--no-env` | 最小限の環境変数だけをコマンドに渡す([環境変数](#環境変数)を参照)。 |
 | `--bg` | このターミナルに出力を表示しない([ターミナルへの出力](#ターミナルへの出力)を参照)。 |
-| `--remind <duration>` | 実行のどれだけ前に、このターミナルで予告するか。デフォルトは `5s`。 |
+| `--remind <duration>` | 実行のどれだけ前に、このターミナルで予告するか。デフォルトは `10s`。 |
 | `--no-remind` | 予告しない。 |
 
 オプションは `--` より前に書きます。値を取るオプションは `--grace 10m` と
@@ -218,15 +223,16 @@ $ laterr +1h -- npm test
 ✓ Scheduled job #7
 ...
 $                                             # プロンプトが戻る
-laterr: job #7 (npm test) runs in 5 seconds   # 59分55秒後
+laterr: job #7 (npm test) runs in 10 seconds (cancel: laterr rm 7)   # 59分50秒後
 ...テストの出力...
 laterr: job #7 failed (exit code 1)           # または succeeded (12.4s)
 ```
 
 - 実行の少し前に予告が表示されるので、入力の途中にいきなり出力が割り込む
-  ことはありません。予告のタイミングは `--remind 1m` で変更でき、
-  `--no-remind` で無効にできます。予約から実行までが予告時間より短い場合
-  (`+3s` など)、予告は出ません。
+  ことはありません。予告にはキャンセル用のコマンド(`laterr rm <id>`)が
+  添えられるので、実行したくなくなった場合はその場で取り消せます。予告の
+  タイミングは `--remind 1m` で変更でき、`--no-remind` で無効にできます。
+  予約から実行までが予告時間より短い場合(`+3s` など)、予告は出ません。
 - 最後の1行でジョブの結果を伝えます。何も出力しないコマンドでも、実行
   されたことが分かります。`missed` になったジョブも通知されます。
 - ジョブの出力は標準出力に、予告と結果の行は標準エラー出力に出ます。
@@ -240,9 +246,14 @@ laterr: job #7 failed (exit code 1)           # または succeeded (12.4s)
 - laterr自身の出力先がターミナルでない場合(パイプ、リダイレクト、
   スクリプトによる捕捉)は、`--bg` と同じ動作になります。スクリプトが
   待たされることはありません。
-- ジョブ自身の出力先はログファイルで、ターミナルではありません。色や
-  プログレスバーをターミナルでだけ使うコマンドは、プレーンな出力になります。
-  多くのコマンドには強制するためのフラグがあります(`--color=always`、
+- 出力をターミナルに表示するジョブは、専用のターミナル上で実行されます。
+  サイズは予約したターミナルと同じで、ウィンドウのサイズを変えると追従
+  します。色やプログレスバー、同じ行を書き換える表示は、手で実行したときと
+  同じように見えます。入力は空のままなので、ジョブから何かを尋ねることは
+  できません。
+- `--bg` を付けた場合や、laterrの出力先がターミナルでない場合は、ジョブは
+  ログファイルへ直接書き込み、コマンドはプレーンな出力になります。多くの
+  コマンドには色を強制するためのフラグがあります(`--color=always`、
   `FORCE_COLOR=1`)。
 
 ### `laterr ls [--all] [--json]`
@@ -304,6 +315,15 @@ Job #42
   Log        /Users/me/Library/Application Support/laterr/logs/42.log
 ```
 
+### `laterr run <id>...`
+
+pendingのジョブを、予定時刻を待たずに今すぐ実行します。それ以外は予約した
+ときのままです。コマンド、ディレクトリ、環境変数は変わらず、出力も予約した
+ターミナル(と `laterr log <id>`)に出ます。予定時刻は現在時刻に書き換わり
+ます。コマンドはジョブの終了ではなく、開始を確認して戻ります。IDは複数指定
+でき、扱いは `laterr rm` と同じです。実行できるのはpendingのジョブだけです。
+実行済みやキャンセル済みのジョブは、予約し直してください。
+
 ### `laterr rm <id>...`
 
 pendingのジョブをキャンセルします。ジョブは `cancelled` として履歴に残り、
@@ -335,6 +355,41 @@ runningのジョブを停止します。コマンドと、それが起動した�
 が対象です。pendingとrunningのジョブには触れません。ジョブIDは再利用
 されません。
 
+### `laterr menubar [on|off]`
+
+macOS専用です。pendingまたはrunningのジョブが1件でもある間、メニューバーに
+時計のアイコンが表示され、その横にジョブの件数が出ます。最後のジョブが
+終わるとアイコンは消え、次にジョブを予約するとまた現れます。
+
+クリックすると、ジョブが1件1行で一覧されます。
+
+```text
+#42   Today 13:00   npm install
+#43   running   npm run build
+────────────────────────────────
+Hide Menu Bar Icon
+```
+
+- 各ジョブにはサブメニューがあります。pendingのジョブでは **Run Now** と
+  **Cancel Job** (`laterr run <id>`、`laterr rm <id>` と同じ)、runningの
+  ジョブでは **Stop Job** (`laterr kill <id>` と同じ)を選べます。
+- **Hide Menu Bar Icon** は、`laterr menubar off` と同じく、アイコンを以後
+  表示しないようにします。
+- 件数はおよそ1秒ごとに更新されます。一覧はメニューを開いた時点で組み立て
+  られ、開いている間は変わりません。
+
+アイコンはデフォルトで有効です。
+
+```sh
+laterr menubar        # 有効か無効かを表示する
+laterr menubar off    # 表示しない
+laterr menubar on     # 再び表示する
+```
+
+アイコンはジョブの状況を見せるだけのものです。無効にしても、アイコン側で
+何か問題が起きても、ジョブがいつどう実行されるかは変わりません。Linuxでは
+このコマンドはエラーになります。
+
 ### `laterr doctor`
 
 インストール状態を診断します。バイナリ、データディレクトリとその権限、
@@ -364,7 +419,7 @@ runningのジョブを停止します。コマンドと、それが起動した�
 | | |
 |---|---|
 | **ターミナルを閉じた** | ジョブは実行されます。ジョブはシェルではなく常駐サービスに属しているためです。失われるのはその場への出力表示だけで、`laterr log <id>` で読めます。 |
-| **ターミナルを開いたままにした** | 実行の5秒前に予告が表示され、続いて出力が表示されます。 |
+| **ターミナルを開いたままにした** | 実行の10秒前に、キャンセル用のコマンドを添えた予告が表示され、続いて出力が表示されます。 |
 | **予定時刻にコンピュータがスリープしていた** | 復帰から30秒以内にジョブが開始されます。 |
 | **コンピュータの電源が切れていた、またはログアウトしていた** | 次にスケジューラが起動したとき(ログイン時)に開始されます。ただし、それが予定時刻から `--grace`(デフォルト24時間)を超えていた場合は、`missed` として記録され、実行されません。 |
 | **ジョブの実行中にログアウトまたは再起動した** | ジョブはスケジューラと一緒に停止され、`interrupted` として記録されます。再実行は **されません**。 |
@@ -409,6 +464,7 @@ shim、同じ認証情報が引き継がれるので、「ターミナルでは�
 | サービス定義 | `~/Library/LaunchAgents/com.laterr.scheduler.plist` | `$XDG_CONFIG_HOME/systemd/user/laterr.service`(デフォルト `~/.config/systemd/user/`) |
 | データとログ | `~/Library/Application Support/laterr/` | `$XDG_DATA_HOME/laterr/`(デフォルト `~/.local/share/laterr/`) |
 | スケジューラの出力 | データディレクトリの `scheduler.log` | `journalctl --user -u laterr.service` |
+| メニューバーのアイコン | あり([`laterr menubar`](#laterr-menubar-onoff) を参照) | なし |
 
 Linuxでは、ユーザーサービスが使えるsystemd(`systemctl --user`)が必要です。
 Windowsには対応していません。
@@ -456,9 +512,24 @@ loginctl enable-linger "$USER"
 プロンプトに戻るまで保留されます。出力は常に `laterr log <id>` にあります。
 
 **出力に色が付かない**
-ジョブの出力先はログファイルなので、ターミナルかどうかを判定するコマンドは
-色を無効にします。コマンド側のオプション(`--color=always` や
-`FORCE_COLOR=1` など)で強制してください。
+`--bg` を付けた場合や、laterrの出力をパイプやリダイレクトした場合、ジョブの
+出力先はログファイルなので、ターミナルかどうかを判定するコマンドは色を
+無効にします。コマンド側のオプション(`--color=always` や `FORCE_COLOR=1`
+など)で強制してください。
+
+**ログがエスケープシーケンスだらけになる**
+出力をターミナルに表示するジョブはターミナル上で実行されるため、ログには
+色や行の書き換えが、コマンドが書いたまま残ります。ターミナルで
+`laterr log <id>` を実行すれば問題なく再生されます。テキストとして読む
+ためのログが必要なら、`--bg` を付けて予約してください。
+
+**メニューバーにアイコンが表示されない(macOS)**
+アイコンが表示されるのは、pendingまたはrunningのジョブがある間だけです。
+コマンドや **Hide Menu Bar Icon** で無効にしていないかは `laterr menubar` で
+確認でき、`laterr menubar on` で元に戻せます。アイコンを起動できなかった
+場合、スケジューラは理由をログに残し、10分後に再試行します。
+`scheduler.log` で `menu bar:` を探してください。`LATERR_HOME` を設定して
+手動で動かしたスケジューラは、アイコンを表示しません。
 
 **ジョブが "command not found" で失敗した**
 コマンドは予約時の `PATH` から、シェルを介さずに探されます。エイリアスや
@@ -511,6 +582,10 @@ loginctl enable-linger "$USER"
   追記されます。ジョブを停止すると、それが起動したものもすべて停止します。
 - **follower** は、ターミナルに残される小さなプロセスです。ログを
   ターミナルに中継するだけで、ジョブの実行には関与しません。
+- **メニューバーのアイコン**(macOS)も独立したプロセスで、表示するジョブが
+  ある間、スケジューラが起動します。同じデータベースを読み、表示するものが
+  なくなるか、スケジューラがいなくなると終了します。アイコン側の障害が
+  スケジューラやジョブを巻き込むことはありません。
 
 すべてのファイルは、本人だけが読める1つのデータディレクトリにあります。
 
@@ -521,6 +596,7 @@ loginctl enable-linger "$USER"
 | `laterr.sock` | CLIがスケジューラと通信するためのソケット |
 | `scheduler.lock` | 実行中のスケジューラが保持するロック。スケジューラはデータディレクトリごとに1つ |
 | `scheduler.log` | スケジューラ自身の出力(macOS) |
+| `menubar.off` | メニューバーのアイコンを無効にした場合に存在する(macOS) |
 
 仕様の全体と、こうした設計判断の理由は [CONCEPT.md](CONCEPT.md) に
 まとめてあります。
@@ -528,7 +604,9 @@ loginctl enable-linger "$USER"
 ## 開発
 
 Go 1.26以降が必要です。`laterr` はSQLiteも含めてpure Goで、CGOなしで
-ビルドできます。
+ビルドできます。メニューバーのアイコンも、cgoではなくObjective-Cランタイム
+([purego](https://github.com/ebitengine/purego))経由でAppKitを呼び出して
+います。
 
 ```sh
 go test ./...                                   # ユニットテストと統合テスト
@@ -543,11 +621,13 @@ CGO_ENABLED=0 go build -o laterr ./cmd/laterr
 | `internal/timespec` | 時刻と時間の構文 |
 | `internal/store` | ジョブとそのステータス遷移(SQLite) |
 | `internal/scheduler` | デーモン: タイミング、ジョブの実行、ソケットのプロトコル |
+| `internal/menubar` | macOSのメニューバーのアイコン |
 | `internal/service` | launchd / systemdとの統合 |
 | `internal/paths` | ファイルの配置場所 |
 
 `LATERR_HOME` を設定すると、`laterr` は別のデータディレクトリを使い、
-サービスの管理を一切行わなくなります。統合テストはこの仕組みを使って、
+サービスの管理を一切行わなくなります(メニューバーのアイコンも表示
+しません)。統合テストはこの仕組みを使って、
 実際のスケジューラに触れずにスケジューラを動かしています。
 
 ```sh

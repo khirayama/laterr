@@ -22,6 +22,7 @@ type Paths struct {
 	Socket       string
 	Lock         string // held by the running scheduler
 	SchedulerLog string // the scheduler's own output (launchd only)
+	MenuBarOff   string // exists if the menu bar icon was turned off (macOS)
 }
 
 // Resolve returns the paths without creating anything.
@@ -55,6 +56,7 @@ func Resolve() (Paths, error) {
 		Socket:       filepath.Join(dir, "laterr.sock"),
 		Lock:         filepath.Join(dir, "scheduler.lock"),
 		SchedulerLog: filepath.Join(dir, "scheduler.log"),
+		MenuBarOff:   filepath.Join(dir, "menubar.off"),
 	}, nil
 }
 

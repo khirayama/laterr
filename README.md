@@ -22,7 +22,7 @@ $ laterr +10m -- npm install
 
   Runs even after this terminal is closed. Stops if you log out mid-run.
 $                                                  # keep working...
-laterr: job #42 (npm install) runs in 5 seconds    # ...ten minutes later
+laterr: job #42 (npm install) runs in 10 seconds (cancel: laterr rm 42)    # ...ten minutes later
 added 312 packages in 8s
 laterr: job #42 succeeded (8.2s)
 ```
@@ -44,6 +44,8 @@ waiting for you in `laterr log` and `laterr show`.
   you scheduled it from
 - **Job management**: list, cancel, stop and inspect jobs; stdout, stderr and
   the exit code are kept
+- **Menu bar icon on macOS**: while jobs are waiting or running, an icon
+  shows how many, and lets you cancel or stop them
 - **No root, no cron, no `at`**: a small per-user background service does the
   work, and installs itself on first use
 - **macOS and Linux**, a single static binary with no runtime dependencies
@@ -120,6 +122,7 @@ laterr @tomorrow/09:00 -- ./backup.sh      # tomorrow morning
 laterr ls                                  # what is waiting or running
 laterr log 1                               # what job 1 printed
 laterr show 1                              # status, times, exit code
+laterr run 2                               # run job 2 now instead of later
 laterr rm 2                                # cancel job 2
 laterr kill 3                              # stop job 3, which is running
 laterr prune                               # forget jobs finished over 30 days ago
@@ -170,10 +173,12 @@ you schedule, so time spent asleep counts.
 | [`laterr [options] <time> -- <command> [args...]`](#laterr-options-time----command-args) | Schedule a command |
 | [`laterr ls [--all] [--json]`](#laterr-ls---all---json) | List jobs |
 | [`laterr show <id>`](#laterr-show-id) | Show the details of a job |
+| [`laterr run <id>...`](#laterr-run-id) | Run pending jobs now instead of later |
 | [`laterr rm <id>...`](#laterr-rm-id) | Cancel pending jobs |
 | [`laterr kill <id>`](#laterr-kill-id) | Stop a running job |
 | [`laterr log <id> [--follow]`](#laterr-log-id---follow) | Print the output of a job |
 | [`laterr prune [--older-than <duration> \| --all]`](#laterr-prune---older-than-duration----all) | Delete finished jobs and their logs |
+| [`laterr menubar [on\|off]`](#laterr-menubar-onoff) | Show jobs in the macOS menu bar |
 | [`laterr doctor`](#laterr-doctor) | Check that laterr is set up correctly |
 | [`laterr uninstall [--purge]`](#laterr-uninstall---purge) | Remove the background service (and data) |
 | `laterr --help`, `laterr --version` | Print the help or the version |
@@ -190,7 +195,7 @@ Schedule a command.
 | `--grace <duration>` | Skip the job if it would start more than this long after its scheduled time. Default `24h`. Same format as a relative time without the `+`, e.g. `10m`, `1h30m`. |
 | `--no-env` | Pass only a minimal environment to the command (see [Environment](#environment)). |
 | `--bg` | Do not print the output in this terminal (see [Output in your terminal](#output-in-your-terminal)). |
-| `--remind <duration>` | How long before the job runs to announce it in this terminal. Default `5s`. |
+| `--remind <duration>` | How long before the job runs to announce it in this terminal. Default `10s`. |
 | `--no-remind` | Do not announce the job. |
 
 Options go before the `--`. Those that take a value accept both
@@ -218,15 +223,17 @@ $ laterr +1h -- npm test
 ✓ Scheduled job #7
 ...
 $                                             # the prompt is back
-laterr: job #7 (npm test) runs in 5 seconds   # 59m55s later
+laterr: job #7 (npm test) runs in 10 seconds (cancel: laterr rm 7)   # 59m50s later
 ...test output...
 laterr: job #7 failed (exit code 1)           # or: succeeded (12.4s)
 ```
 
 - A heads-up is printed shortly before the job runs, so the output does not
-  land in the middle of what you are typing without warning. Change the lead
-  time with `--remind 1m`, or turn it off with `--no-remind`. There is no
-  heads-up when the job is due sooner than the lead time (`+3s`).
+  land in the middle of what you are typing without warning. It includes the
+  command to cancel the job (`laterr rm <id>`), in case you no longer want it
+  to run. Change the lead time with `--remind 1m`, or turn it off with
+  `--no-remind`. There is no heads-up when the job is due sooner than the
+  lead time (`+3s`).
 - A last line says how the job ended, so that a command that prints nothing
   still leaves a sign of having run. A job that was `missed` is reported too.
 - The job's output goes to stdout; the heads-up and the result line go to
@@ -241,9 +248,14 @@ laterr: job #7 failed (exit code 1)           # or: succeeded (12.4s)
   goes to the log only.
 - When laterr's own output is not a terminal (a pipe, a redirect, a script
   capturing it), it behaves like `--bg`, so scripts are never kept waiting.
-- The job itself writes to a log file, not to a terminal. Commands that only
-  use colors or progress bars on a terminal will print their plain output.
-  Many have a flag to force it (`--color=always`, `FORCE_COLOR=1`).
+- A job whose output is shown in your terminal runs on a terminal of its
+  own, the size of yours, and follows when you resize the window. Colors,
+  progress bars and lines that redraw themselves look as they do when you
+  run the command by hand. Its input is still empty: it cannot ask you
+  anything.
+- With `--bg`, or when laterr's output is not a terminal, the job writes
+  straight to its log file and commands print their plain output. Many have
+  a flag to force colors (`--color=always`, `FORCE_COLOR=1`).
 
 ### `laterr ls [--all] [--json]`
 
@@ -303,6 +315,16 @@ Job #42
   Log        /Users/me/Library/Application Support/laterr/logs/42.log
 ```
 
+### `laterr run <id>...`
+
+Run pending jobs now instead of waiting for their time. The job is otherwise
+the one you scheduled: same command, directory and environment, and its
+output still goes to the terminal it was scheduled from (and to
+`laterr log <id>`). Its scheduled time becomes now. The command returns once
+the job has started, not once it has finished. Several IDs can be given, with
+the same rules as for `laterr rm`. Only a pending job can be run: one that has
+run, or was cancelled, has to be scheduled again.
+
 ### `laterr rm <id>...`
 
 Cancel pending jobs. They stay in the history as `cancelled` and will never
@@ -333,6 +355,41 @@ days ago, with `--older-than 7d` those older than that, with `--all` every
 finished job. Pending and running jobs are never touched. Job IDs are not
 reused.
 
+### `laterr menubar [on|off]`
+
+macOS only. While at least one job is pending or running, a clock icon sits
+in the menu bar with the number of those jobs next to it. It goes away when
+the last one ends, and comes back with the next job you schedule.
+
+Click it for the list, one line per job:
+
+```text
+#42   Today 13:00   npm install
+#43   running   npm run build
+────────────────────────────────
+Hide Menu Bar Icon
+```
+
+- Each job opens a submenu: **Run Now** and **Cancel Job** for a pending job
+  (the same as `laterr run <id>` and `laterr rm <id>`), **Stop Job** for a
+  running one (`laterr kill <id>`).
+- **Hide Menu Bar Icon** turns the icon off for good, like
+  `laterr menubar off`.
+- The count is refreshed about once a second. The list is filled in when you
+  open it, and does not change while it is open.
+
+The icon is on by default:
+
+```sh
+laterr menubar        # say whether it is on or off
+laterr menubar off    # never show it
+laterr menubar on     # show it again
+```
+
+The icon is only a view of the jobs. Turning it off, or anything going wrong
+with it, changes nothing about when and how jobs run. On Linux the command
+fails with an error.
+
 ### `laterr doctor`
 
 Check the installation: binary, data directory and permissions, database,
@@ -362,7 +419,7 @@ See [Uninstall](#uninstall).
 | | |
 |---|---|
 | **I close the terminal** | The job runs anyway: it belongs to the background service, not to your shell. Only the live copy of the output is lost; read it with `laterr log <id>`. |
-| **I keep the terminal open** | A heads-up appears 5 seconds before the job runs, then its output. |
+| **I keep the terminal open** | A heads-up appears 10 seconds before the job runs, with the command to cancel it, then its output. |
 | **The computer is asleep at the scheduled time** | The job starts within 30 seconds of waking up. |
 | **The computer is off, or I am logged out** | The job starts the next time the scheduler runs (at login), unless that is more than `--grace` (default 24 hours) after the scheduled time. Then it is recorded as `missed` and not run. |
 | **I log out or reboot while a job is running** | The job is stopped along with the scheduler and recorded as `interrupted`. It is **not** run again. |
@@ -405,6 +462,7 @@ That copy is stored on disk for as long as the job can still run, so:
 | Service definition | `~/Library/LaunchAgents/com.laterr.scheduler.plist` | `$XDG_CONFIG_HOME/systemd/user/laterr.service` (default `~/.config/systemd/user/`) |
 | Data and logs | `~/Library/Application Support/laterr/` | `$XDG_DATA_HOME/laterr/` (default `~/.local/share/laterr/`) |
 | Scheduler output | `scheduler.log` in the data directory | `journalctl --user -u laterr.service` |
+| Menu bar icon | yes, see [`laterr menubar`](#laterr-menubar-onoff) | no |
 
 Linux requires systemd with user services (`systemctl --user`). Windows is
 not supported.
@@ -450,9 +508,23 @@ While another program is in the foreground it is held back until the prompt
 returns. It is always in `laterr log <id>`.
 
 **The output has no colors**
-The job writes to a log file, so commands that check for a terminal turn
-colors off. Force them with the command's own option, for example
-`--color=always` or `FORCE_COLOR=1`.
+With `--bg`, or when laterr's output was piped or redirected, the job writes
+to a log file, so commands that check for a terminal turn colors off. Force
+them with the command's own option, for example `--color=always` or
+`FORCE_COLOR=1`.
+
+**The log is full of escape sequences**
+A job whose output is shown in your terminal runs on a terminal, so its log
+holds colors and redrawn lines as the command wrote them. `laterr log <id>`
+replays them fine on a terminal. For a log meant to be read as text,
+schedule with `--bg`.
+
+**The menu bar icon does not appear (macOS)**
+It is only there while a job is pending or running. `laterr menubar` says
+whether it has been turned off, by the command or by **Hide Menu Bar Icon**;
+`laterr menubar on` brings it back. If the icon could not be started, the
+scheduler logs why and tries again 10 minutes later: look for `menu bar:` in
+`scheduler.log`. A scheduler run by hand with `LATERR_HOME` never shows one.
 
 **The job failed with "command not found"**
 The command is looked up in the `PATH` captured when scheduling, and without
@@ -504,6 +576,10 @@ newer binary; if the message comes from the scheduler, restart it.
   log file. Stopping a job stops everything it started.
 - The **follower** is a small process left behind in your terminal. It only
   relays the log to the terminal; it has no part in running the job.
+- The **menu bar icon** (macOS) is another process of its own, started by the
+  scheduler while there are jobs to show. It reads the same database, and
+  exits when nothing is left to show or the scheduler goes away. A fault in
+  it cannot take the scheduler or a job down.
 
 Everything lives in one data directory, readable only by you:
 
@@ -514,6 +590,7 @@ Everything lives in one data directory, readable only by you:
 | `laterr.sock` | socket the CLI uses to reach the scheduler |
 | `scheduler.lock` | held by the running scheduler; there is one per data directory |
 | `scheduler.log` | the scheduler's own output (macOS) |
+| `menubar.off` | present if the menu bar icon was turned off (macOS) |
 
 [CONCEPT.md](CONCEPT.md) (in Japanese) has the full specification and the
 reasoning behind these choices.
@@ -521,7 +598,8 @@ reasoning behind these choices.
 ## Development
 
 Requires Go 1.26 or later. `laterr` is pure Go, SQLite included, and builds
-without CGO.
+without CGO. The menu bar icon reaches AppKit through the Objective-C runtime
+([purego](https://github.com/ebitengine/purego)) rather than cgo.
 
 ```sh
 go test ./...                                   # unit and integration tests
@@ -536,11 +614,12 @@ CGO_ENABLED=0 go build -o laterr ./cmd/laterr
 | `internal/timespec` | the time and duration syntax |
 | `internal/store` | jobs and their status transitions, in SQLite |
 | `internal/scheduler` | the daemon: timing, running jobs, the socket protocol |
+| `internal/menubar` | the macOS menu bar icon |
 | `internal/service` | launchd and systemd integration |
 | `internal/paths` | where the files live |
 
 Setting `LATERR_HOME` points `laterr` at another data directory and disables
-all service management, which is how the integration tests run a scheduler
+all service management (and the menu bar icon), which is how the integration tests run a scheduler
 without touching your real one:
 
 ```sh

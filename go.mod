@@ -3,6 +3,8 @@ module github.com/khirayama/laterr
 go 1.26.0
 
 require (
+	github.com/creack/pty v1.1.24
+	github.com/ebitengine/purego v0.11.1
 	golang.org/x/sys v0.48.0
 	modernc.org/sqlite v1.60.1
 )
