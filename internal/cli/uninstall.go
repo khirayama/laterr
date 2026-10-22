@@ -61,12 +61,15 @@ func (a *app) uninstall(args []string) error {
 		fmt.Fprintln(a.stdout, "! A scheduler is still running; it was not started by the background service.")
 	}
 
+	if _, err := os.Stat(p.Dir); os.IsNotExist(err) {
+		return nil // no data to remove or keep
+	}
 	if purge {
 		if err := os.RemoveAll(p.Dir); err != nil {
 			return err
 		}
 		fmt.Fprintf(a.stdout, "✓ Removed data: %s\n", p.Dir)
-	} else if _, err := os.Stat(p.Dir); err == nil {
+	} else {
 		fmt.Fprintf(a.stdout, "- Kept job history and logs in %s\n  Remove them with `laterr uninstall --purge`.\n", p.Dir)
 	}
 	return nil
