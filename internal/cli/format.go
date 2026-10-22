@@ -119,10 +119,10 @@ func shortCommand(argv []string) string {
 }
 
 // oneLine makes s safe for a table cell: no line breaks, bounded length.
-func oneLine(s string, max int) string {
+func oneLine(s string, limit int) string {
 	s = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\t", "\\t").Replace(s)
-	if r := []rune(s); len(r) > max {
-		return string(r[:max-1]) + "…"
+	if r := []rune(s); len(r) > limit {
+		return string(r[:limit-1]) + "…"
 	}
 	return s
 }

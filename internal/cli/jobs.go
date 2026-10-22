@@ -163,33 +163,7 @@ func (a *app) show(args []string) error {
 const startWait = 5 * time.Second
 
 func (a *app) runNow(args []string) error {
-	_, positional, err := parseArgs("run", args)
-	if err != nil {
-		return err
-	}
-	if len(positional) == 0 {
-		return usagef("usage: laterr run <id>...")
-	}
-	// Check every ID before touching anything, so that a typo starts nothing.
-	ids := make([]int64, len(positional))
-	for i, arg := range positional {
-		if ids[i], err = parseID(arg); err != nil {
-			return err
-		}
-	}
-	failed := false
-	for _, id := range ids {
-		if err := a.start(id); err != nil {
-			failed = true
-			fmt.Fprintf(a.stderr, "Error: %v\n", err)
-			continue
-		}
-		fmt.Fprintf(a.stdout, "✓ Started job #%d\n", id)
-	}
-	if failed {
-		return errSilent
-	}
-	return nil
+	return a.eachJob("run", args, "Started", a.start)
 }
 
 func (a *app) start(id int64) error {
@@ -230,18 +204,26 @@ func (a *app) start(id int64) error {
 	if !started {
 		return fmt.Errorf("job #%d is due now but has not started (see `laterr doctor`)", id)
 	}
+	if j.Status == store.Cancelled {
+		return fmt.Errorf("job #%d was cancelled before it started", id)
+	}
 	return nil
 }
 
 func (a *app) remove(args []string) error {
-	_, positional, err := parseArgs("rm", args)
+	return a.eachJob("rm", args, "Cancelled", a.cancel)
+}
+
+// eachJob applies do to every job ID given to cmd and reports each outcome.
+// Every ID is checked before any is acted on, so that a typo changes nothing.
+func (a *app) eachJob(cmd string, args []string, done string, do func(id int64) error) error {
+	_, positional, err := parseArgs(cmd, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) == 0 {
-		return usagef("usage: laterr rm <id>...")
+		return usagef("usage: laterr %s <id>...", cmd)
 	}
-	// Check every ID before touching anything, so that a typo cancels nothing.
 	ids := make([]int64, len(positional))
 	for i, arg := range positional {
 		if ids[i], err = parseID(arg); err != nil {
@@ -250,12 +232,12 @@ func (a *app) remove(args []string) error {
 	}
 	failed := false
 	for _, id := range ids {
-		if err := a.cancel(id); err != nil {
+		if err := do(id); err != nil {
 			failed = true
 			fmt.Fprintf(a.stderr, "Error: %v\n", err)
 			continue
 		}
-		fmt.Fprintf(a.stdout, "✓ Cancelled job #%d\n", id)
+		fmt.Fprintf(a.stdout, "✓ %s job #%d\n", done, id)
 	}
 	if failed {
 		return errSilent
@@ -278,7 +260,10 @@ func (a *app) cancel(id int64) error {
 			if se.Status == store.Running {
 				return fmt.Errorf("job #%d is already running (stop it with `laterr kill %d`)", id, id)
 			}
-			return fmt.Errorf("job #%d is already %s", id, se.Status)
+			if se.Status == store.Cancelled {
+				return fmt.Errorf("job #%d is already cancelled", id)
+			}
+			return fmt.Errorf("job #%d cannot be cancelled (it %s)", id, pastTense(se.Status))
 		}
 		return err
 	}

@@ -374,6 +374,9 @@ func TestRunNow(t *testing.T) {
 		t.Errorf("run 1 2 3 9: exit %d, %q, %q", code, out, errOut)
 	}
 	s.wait(2, "succeeded")
+	if _, errOut, code := s.run("rm", "1"); code == 0 || errOut != "Error: job #1 cannot be cancelled (it has succeeded)\n" {
+		t.Errorf("rm 1: exit %d, %q", code, errOut)
+	}
 }
 
 func TestLongJobDoesNotDelayOthersAndStopsWithScheduler(t *testing.T) {
