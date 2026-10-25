@@ -161,7 +161,7 @@ func definedBinary(goos, def string) (string, error) {
 			}
 		}
 	} else if m := unitProgram.FindStringSubmatch(def); m != nil {
-		return strings.NewReplacer(`\\`, `\`, `\"`, `"`, `%%`, `%`, `$$`, `$`).Replace(m[1]), nil
+		return strings.NewReplacer(`\\`, `\`, `\"`, `"`, `\n`, "\n", `\r`, "\r", `\t`, "\t", `%%`, `%`, `$$`, `$`).Replace(m[1]), nil
 	}
 	return "", errors.New("unrecognized format")
 }
@@ -267,7 +267,7 @@ func startLaunchd(plist string, reload bool) error {
 func systemdUnitFile(binary string) string {
 	// Quote the path for systemd: C-style escapes inside double quotes, with
 	// "%" and "$" doubled so they are not expanded.
-	q := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`, `$`, `$$`).Replace(binary)
+	q := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, `%`, `%%`, `$`, `$$`).Replace(binary)
 	return `[Unit]
 Description=laterr scheduler (runs commands later)
 

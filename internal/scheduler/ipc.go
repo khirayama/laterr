@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"time"
@@ -34,6 +35,10 @@ const (
 // ioTimeout bounds one exchange, on either side of the socket.
 const ioTimeout = 2 * time.Second
 
+// Requests and responses contain only small control messages. Bound both sides
+// independently of the deadline so a fast peer cannot exhaust memory.
+const maxMessageSize = 4096
+
 // response is Info plus the outcome of the operation. Schedulers from before
 // "kill" existed answer every request with a bare Info.
 type response struct {
@@ -62,7 +67,7 @@ func call(socket string, req request) (response, error) {
 		return response{}, ErrUnavailable
 	}
 	var resp response
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(conn, maxMessageSize)).Decode(&resp); err != nil {
 		return response{}, ErrUnavailable
 	}
 	return resp, nil
@@ -149,8 +154,8 @@ func (s *scheduler) serve(l net.Listener) {
 func (s *scheduler) handle(conn net.Conn) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(ioTimeout))
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
-	if err != nil {
+	line, err := bufio.NewReader(io.LimitReader(conn, maxMessageSize+1)).ReadBytes('\n')
+	if err != nil || len(line) > maxMessageSize {
 		return
 	}
 	var req request

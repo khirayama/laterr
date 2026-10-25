@@ -68,12 +68,17 @@ func TestDefinedBinaryRoundTrip(t *testing.T) {
 		"/opt/homebrew/bin/laterr",
 		"/opt/a&b <x>/laterr",
 		`/home/me/my "bin" $x 100%\dir/laterr`,
+		"/home/me/line\nEnvironment=INJECTED\r\ttab/laterr",
+		`/home/me/literal\n\r\t/laterr`,
 	} {
 		if got, err := definedBinary("darwin", launchdPlist(bin, "/tmp/log")); err != nil || got != bin {
 			t.Errorf("launchd %q: got %q, %v", bin, got, err)
 		}
 		if got, err := definedBinary("linux", systemdUnitFile(bin)); err != nil || got != bin {
 			t.Errorf("systemd %q: got %q, %v", bin, got, err)
+		}
+		if strings.Contains(systemdUnitFile(bin), "\nEnvironment=") {
+			t.Errorf("path injected a systemd directive: %q", bin)
 		}
 	}
 	if _, err := definedBinary("darwin", "garbage"); err == nil {
