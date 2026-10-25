@@ -15,6 +15,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 
+	"github.com/khirayama/laterr/internal/paths"
 	"github.com/khirayama/laterr/internal/store"
 )
 
@@ -35,7 +36,7 @@ type output struct {
 }
 
 func openOutput(j store.Job) (*output, error) {
-	logFile, err := os.OpenFile(j.LogPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	logFile, err := paths.OpenPrivateFile(j.LogPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open log file: %w", err)
 	}

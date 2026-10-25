@@ -111,6 +111,31 @@ func TestPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestOpenRepairsDatabasePermissions(t *testing.T) {
+	s, path := open(t)
+	j := add(t, s, t0, time.Hour)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("database permissions: %v, %v", fi, err)
+	}
+	if got, err := s.Get(j.ID); err != nil || got.Status != Pending {
+		t.Fatalf("existing job was not preserved: %+v, %v", got, err)
+	}
+	if _, err := s.Env(j.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTransitions(t *testing.T) {
 	s, _ := open(t)
 	wantState := func(err error, st Status) {

@@ -69,7 +69,7 @@ func Run(ctx context.Context, p paths.Paths, version string) error {
 	if err := p.EnsureDirs(); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(p.Lock, os.O_RDWR|os.O_CREATE, 0o600)
+	lock, err := paths.OpenPrivateFile(p.Lock, os.O_RDWR|os.O_CREATE)
 	if err != nil {
 		return err
 	}

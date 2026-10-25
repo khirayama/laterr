@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+
+	"golang.org/x/sys/unix"
 )
 
 // HomeEnv overrides the data directory. It exists for tests and development:
@@ -65,11 +67,24 @@ func ServiceManaged() bool {
 	return os.Getenv(HomeEnv) == ""
 }
 
-// EnsureDirs creates the data and log directories, readable by the user only.
+// EnsureDirs creates the data and log directories and repairs their permissions.
+// The final components must be real directories, not symbolic links.
 func (p Paths) EnsureDirs() error {
 	for _, d := range []string{p.Dir, p.Logs} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
+		}
+		f, err := os.OpenFile(d, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return err
+		}
+		err = f.Chmod(0o700)
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
 	return nil

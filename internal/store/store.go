@@ -10,6 +10,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/khirayama/laterr/internal/paths"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -122,11 +124,13 @@ CREATE INDEX IF NOT EXISTS jobs_status_scheduled_at ON jobs (status, scheduled_a
 
 // Open opens the database at path, creating it (mode 0600) if necessary.
 func Open(path string) (*Store, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	f, err := paths.OpenPrivateFile(path, os.O_RDWR|os.O_CREATE)
 	if err != nil {
 		return nil, err
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
 
 	// BEGIN IMMEDIATE takes the write lock up front, so concurrent writers
 	// queue on busy_timeout instead of failing halfway through a transaction.

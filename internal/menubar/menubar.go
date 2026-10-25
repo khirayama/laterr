@@ -37,7 +37,7 @@ func SetEnabled(p paths.Paths, on bool) error {
 	if err := p.EnsureDirs(); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(p.MenuBarOff, os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := paths.OpenPrivateFile(p.MenuBarOff, os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		return err
 	}
