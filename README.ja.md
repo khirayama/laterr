@@ -447,6 +447,10 @@ shim、同じ認証情報が引き継がれるので、「ターミナルでは�
   いずれでも同じです。保持しているのはpendingとrunningのジョブだけです。
 - データディレクトリは本人だけが読めます(ディレクトリ `0700`、
   ファイル `0600`)。
+  既存のディレクトリ、DB、ジョブログの権限も使用時に補正します。
+  データ・ログディレクトリと書き込み対象のデータファイルにはシンボリック
+  リンクを使えません。`LATERR_HOME` を設定する場合も、実体のディレクトリを
+  指定してください。
 - 変数の値を `laterr` が表示することはありません。`show`、`ls`、`--json`
   のいずれにも出ません。予約時に件数が表示されるだけです。
 - `--no-env` を付けると、`PATH`、`HOME`、`USER`、`LOGNAME`、`SHELL`、
@@ -603,16 +607,29 @@ loginctl enable-linger "$USER"
 
 ## 開発
 
-Go 1.26以降が必要です。`laterr` はSQLiteも含めてpure Goで、CGOなしで
+セキュリティパッチを適用したGo 1.26以降が必要です。開発時は `go.mod` の
+設定によりGo 1.27.3以降が選択され、必要に応じてGoが自動ダウンロードします。
+`laterr` はSQLiteも含めてpure Goで、CGOなしで
 ビルドできます。メニューバーのアイコンも、cgoではなくObjective-Cランタイム
 ([purego](https://github.com/ebitengine/purego))経由でAppKitを呼び出して
 います。
 
 ```sh
-go test ./...                                   # ユニットテストと統合テスト
-go vet ./... && gofmt -l .                      # CIがチェックする内容
-CGO_ENABLED=0 go build -o laterr ./cmd/laterr
+make check          # フォーマット、モジュール、vet、テスト、脆弱性検査
+make fmt            # Goソースを整形
+make build          # CGOなしで ./laterr をビルド
+make race           # データ競合を検査(Cコンパイラが必要)
+make cross-build    # リリース対象の4環境向けにビルド
 ```
+
+`make vulncheck` はMakefileでバージョンを固定した
+[govulncheck](https://go.dev/doc/security/vuln/)を、一時ディレクトリにインストール
+して実行します。プラットフォーム固有のコードは
+`GOOS=linux GOARCH=arm64 make vulncheck` または
+`GOOS=darwin GOARCH=arm64 make vulncheck` で検査できます。CIは両方の検査を
+push・Pull Request時と毎週実行し、Go 1.26と最新安定版でmacOS・Linuxの
+テストを、Linuxでデータ競合の検査を行います。DependabotがGoモジュールと
+GitHub Actionsの更新を毎週提案し、Actionsはコミットハッシュで固定します。
 
 | パッケージ | 責務 |
 |---|---|
@@ -631,9 +648,9 @@ CGO_ENABLED=0 go build -o laterr ./cmd/laterr
 実際のスケジューラに触れずにスケジューラを動かしています。
 
 ```sh
-export LATERR_HOME=/tmp/laterr-dev
-laterr daemon &            # スケジューラをフォアグラウンドで動かす
-laterr +5s -- echo hello
+export LATERR_HOME="$(mktemp -d /tmp/laterr-dev.XXXXXX)"
+./laterr daemon &          # 開発用バイナリのスケジューラを動かす
+./laterr +5s -- echo hello
 ```
 
 このパスは短くしてください。配下にUnixソケットを置くため、アドレスの長さが
@@ -644,9 +661,9 @@ laterr +5s -- echo hello
 
 ## コントリビュート
 
-IssueやPull Requestを歓迎します。Pull Requestを出す前に、`gofmt`、
-`go vet ./...`、`go test ./...` が通ることを確認してください。CIはこれらを
-macOSとLinuxで実行します。
+IssueやPull Requestを歓迎します。Pull Requestを出す前に、`make check` が
+通ることを確認してください。CIではプラットフォームの互換性とデータ競合も
+検査します。
 
 `laterr` は意図的に小さく保っています。定期実行、リトライ、リモートホスト、
 Windows対応はスコープ外です。[CONCEPT.md](CONCEPT.md) の Non-goals を参照

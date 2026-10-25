@@ -445,6 +445,9 @@ That copy is stored on disk for as long as the job can still run, so:
 - It is erased as soon as the job ends, whether it succeeded, failed, was
   cancelled or was missed. Only pending and running jobs have one.
 - The data directory is readable only by you (`0700`, files `0600`).
+  Existing directory, database and job log permissions are repaired when
+  opened. The data directory, log directory and writable data files must not
+  be symlinks. When setting `LATERR_HOME`, use the real directory path.
 - Variable values are never printed by `laterr`, not in `show`, `ls` or
   `--json`. Only their count is shown when scheduling.
 - With `--no-env`, only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`,
@@ -597,15 +600,27 @@ reasoning behind these choices.
 
 ## Development
 
-Requires Go 1.26 or later. `laterr` is pure Go, SQLite included, and builds
+Requires Go 1.26 or later with the latest security patches. `go.mod` selects
+Go 1.27.3 or newer for development (downloaded automatically by Go).
+`laterr` is pure Go, SQLite included, and builds
 without CGO. The menu bar icon reaches AppKit through the Objective-C runtime
 ([purego](https://github.com/ebitengine/purego)) rather than cgo.
 
 ```sh
-go test ./...                                   # unit and integration tests
-go vet ./... && gofmt -l .                      # what CI checks
-CGO_ENABLED=0 go build -o laterr ./cmd/laterr
+make check          # formatting, modules, vet, tests, vulnerability scan
+make fmt            # format Go sources
+make build          # build ./laterr without CGO
+make race           # race detector (requires a C compiler)
+make cross-build    # build all four release targets
 ```
+
+`make vulncheck` runs [govulncheck](https://go.dev/doc/security/vuln/) at the
+version pinned in the Makefile without installing a global tool. To check
+platform-specific code, run `GOOS=linux GOARCH=arm64 make vulncheck` or
+`GOOS=darwin GOARCH=arm64 make vulncheck`. CI runs both scans weekly and on
+pushes and pull requests, tests on macOS and Linux with Go 1.26 and the latest
+stable Go, and checks for data races on Linux. Dependabot proposes weekly Go
+module and GitHub Actions updates; Actions are pinned to commit hashes.
 
 | Package | Responsibility |
 |---|---|
@@ -623,9 +638,9 @@ all service management (and the menu bar icon), which is how the integration tes
 without touching your real one:
 
 ```sh
-export LATERR_HOME=/tmp/laterr-dev
-laterr daemon &            # the scheduler, in the foreground
-laterr +5s -- echo hello
+export LATERR_HOME="$(mktemp -d /tmp/laterr-dev.XXXXXX)"
+./laterr daemon &          # run the development binary's scheduler
+./laterr +5s -- echo hello
 ```
 
 Keep that path short: it holds a Unix socket, whose address is limited to
@@ -637,8 +652,8 @@ Linux (arm64 and amd64) and publishes them with their checksums.
 ## Contributing
 
 Issues and pull requests are welcome. Before opening a pull request, please
-make sure `gofmt`, `go vet ./...` and `go test ./...` pass; CI runs them on
-macOS and Linux.
+make sure `make check` passes; CI also checks platform compatibility and data
+races.
 
 `laterr` is deliberately small. Recurring schedules, retries, remote hosts and
 Windows support are out of scope; see the non-goals in

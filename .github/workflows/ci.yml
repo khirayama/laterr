@@ -4,9 +4,16 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 2 * * 1"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -14,37 +21,85 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        go: ["1.26.x", stable]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     env:
       CGO_ENABLED: "0"
+      # Ensure the minimum-version job does not silently use go.mod's toolchain.
+      GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          go-version: stable
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+          cache-dependency-path: go.sum
       - name: Format
-        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+        run: make fmt-check
+      - name: Verify modules
+        run: make mod-check
       - name: Vet
-        run: go vet ./...
+        run: make vet
       # Includes the integration tests, which run a real scheduler against a
       # temporary data directory.
       - name: Test
-        run: go test -count=1 ./...
+        run: make test
       - name: Build
-        run: go build -o laterr ./cmd/laterr && ./laterr --version
+        run: make build && ./laterr --version
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [linux, darwin]
+    env:
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.os }}
+      GOARCH: arm64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Vulnerability scan
+        run: make vulncheck
+
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Race detector
+        run: make race
 
   cross-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
+          check-latest: true
+          cache-dependency-path: go.sum
       - name: Build all release targets
-        run: |
-          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
-            echo "building $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/laterr
-          done
+        run: make cross-build

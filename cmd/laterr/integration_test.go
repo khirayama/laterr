@@ -31,8 +31,14 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	binary = filepath.Join(dir, "laterr")
-	build := exec.Command("go", "build", "-o", binary, ".")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	args := []string{"build", "-o", binary}
+	cgo := "CGO_ENABLED=0"
+	if raceEnabled {
+		args = append(args, "-race")
+		cgo = "CGO_ENABLED=1"
+	}
+	build := exec.Command("go", append(args, ".")...)
+	build.Env = append(os.Environ(), cgo)
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "build failed: %v\n%s", err, out)
 		os.Exit(1)
@@ -62,7 +68,26 @@ type sandbox struct {
 	work   string // directory commands are scheduled from
 	extra  []string
 	daemon *exec.Cmd
-	log    *bytes.Buffer
+	log    *lockedBuffer
+}
+
+// exec.Cmd copies stderr in a goroutine while tests inspect it for recovery
+// messages. bytes.Buffer alone is not safe for those concurrent accesses.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func newSandbox(t *testing.T) *sandbox {
@@ -88,13 +113,19 @@ func newSandbox(t *testing.T) *sandbox {
 }
 
 func (s *sandbox) env() []string {
-	return append(append(os.Environ(), "LATERR_HOME="+s.home, "TZ=UTC"), s.extra...)
+	env := append(os.Environ(), "LATERR_HOME="+s.home, "TZ=UTC")
+	if raceEnabled {
+		// Race-instrumented CLI calls are short-lived and frequently polled.
+		// Keep reports enabled without sleeping a second on every clean exit.
+		env = append(env, "GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0 exitcode=66")
+	}
+	return append(env, s.extra...)
 }
 
 func (s *sandbox) startDaemon() {
 	s.t.Helper()
 	if s.log == nil {
-		s.log = &bytes.Buffer{}
+		s.log = &lockedBuffer{}
 	}
 	s.daemon = exec.Command(binary, "daemon")
 	s.daemon.Env = s.env()
@@ -119,6 +150,9 @@ func (s *sandbox) stopDaemon(sig syscall.Signal) {
 	}
 	s.daemon.Process.Signal(sig)
 	s.daemon.Wait()
+	if raceEnabled && s.daemon.ProcessState.ExitCode() == 66 {
+		s.t.Errorf("scheduler data race:\n%s", s.log)
+	}
 	s.daemon = nil
 }
 
@@ -908,9 +942,11 @@ func TestInterrupt(t *testing.T) {
 		}
 	}
 
-	term := s.onTerminal(80, 24, "--no-remind", "+2s", "--", "sh", "-c", "echo started; sleep 60")
+	term := s.onTerminal(80, 24, "--remind", "1s", "+3s", "--", "sh", "-c", "echo started; sleep 60")
 	// Before the job runs, Ctrl-C is none of the follower's business.
-	term.waitFor("Scheduled job #1")
+	// The reminder confirms that the follower has installed its signal handler,
+	// including when startup is slowed down by race instrumentation.
+	term.waitFor("runs in 1 second (cancel: laterr rm 1)")
 	ctrlC(term)
 	term.waitFor("started\r\n")
 	ctrlC(term)

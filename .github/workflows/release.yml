@@ -7,20 +7,29 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
     env:
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
-      - name: Test
-        run: go test -count=1 ./...
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Check
+        run: make check
+      - name: Check macOS vulnerabilities
+        run: GOOS=darwin GOARCH=arm64 make vulncheck
       - name: Build
         run: |
           version=${GITHUB_REF_NAME#v}
