@@ -420,7 +420,10 @@ See [Uninstall](#uninstall).
 |---|---|
 | **I close the terminal** | The job runs anyway: it belongs to the background service, not to your shell. Only the live copy of the output is lost; read it with `laterr log <id>`. |
 | **I keep the terminal open** | A heads-up appears 10 seconds before the job runs, with the command to cancel it, then its output. |
-| **The computer is asleep at the scheduled time** | The job starts within 30 seconds of waking up. |
+| **The computer is asleep at the scheduled time** | The job starts within 30 seconds of waking up, unless it has slept past `--grace`: then it is `missed`. `laterr` does not wake the machine. |
+| **The computer goes to sleep while a job is running** | The job is frozen along with everything else and continues on wake. It is not `interrupted`, but its reported duration includes the time asleep, and network connections or timeouts in the command may fail. |
+| **The screen is locked** | Nothing changes: you are still logged in, so jobs start and run as usual. A macOS permission dialog (see [protected folders](#macos-protected-folders)) waits until you unlock. |
+| **A laptop lid is closed** | The machine usually sleeps, see above. |
 | **The computer is off, or I am logged out** | The job starts the next time the scheduler runs (at login), unless that is more than `--grace` (default 24 hours) after the scheduled time. Then it is recorded as `missed` and not run. |
 | **I log out or reboot while a job is running** | The job is stopped along with the scheduler and recorded as `interrupted`. It is **not** run again. |
 | **A job fails** | It is recorded as `failed` with its exit code. There are no retries. |
@@ -432,6 +435,12 @@ risk running the command twice.
 
 Exact timing is only promised while you are logged in and the machine is
 awake. When a job starts late, `laterr show` has the actual start time.
+
+`laterr` never keeps the machine awake. To make sure a job runs on time and
+is not paused halfway, keep the machine awake yourself: on macOS, run
+`caffeinate -i -t <seconds>` in another terminal (or prefix the job with
+`caffeinate -i` to stay awake while it runs); on Linux, use
+`systemd-inhibit`.
 
 ## Environment
 
