@@ -32,6 +32,11 @@ func TestLaunchdPlist(t *testing.T) {
 		"ProgramArguments|/opt/a&b <x>/laterr|daemon",
 		"StandardErrorPath|/Users/me/Library/Application Support/laterr/scheduler.log",
 		"KeepAlive", "RunAtLoad",
+		// Jobs inherit the daemon's process type and should run as they would
+		// from a terminal. Background throttles their CPU and I/O (priority 4, a
+		// CPU-bound loop ran several times slower) and Standard runs them at
+		// priority 20, below the apps in use; only Interactive gives 31.
+		"ProcessType|Interactive",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("plist lacks %q:\n%s", want, joined)

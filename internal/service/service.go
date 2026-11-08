@@ -229,7 +229,7 @@ func launchdPlist(binary, schedulerLog string) string {
 	<key>KeepAlive</key>
 	<true/>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Interactive</string>
 	<key>StandardOutPath</key>
 	<string>` + esc(schedulerLog) + `</string>
 	<key>StandardErrorPath</key>
