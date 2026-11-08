@@ -6,9 +6,9 @@ toolchain go1.27.3
 
 require (
 	github.com/creack/pty v1.1.24
-	github.com/ebitengine/purego v0.11.2
+	github.com/ebitengine/purego v0.11.3
 	golang.org/x/sys v0.49.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
