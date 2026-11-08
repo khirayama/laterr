@@ -83,12 +83,7 @@ func Install(binary, schedulerLog string) (path string, created bool, err error)
 	if err != nil {
 		return "", false, err
 	}
-	var want string
-	if runtime.GOOS == "darwin" {
-		want = launchdPlist(binary, schedulerLog)
-	} else {
-		want = systemdUnitFile(binary)
-	}
+	want := definition(runtime.GOOS, binary, schedulerLog)
 	old, readErr := os.ReadFile(path)
 	created = os.IsNotExist(readErr)
 	changed := string(old) != want
@@ -106,6 +101,35 @@ func Install(binary, schedulerLog string) (path string, created bool, err error)
 		err = startSystemd(changed)
 	}
 	return path, created, err
+}
+
+func definition(goos, binary, schedulerLog string) string {
+	if goos == "darwin" {
+		return launchdPlist(binary, schedulerLog)
+	}
+	return systemdUnitFile(binary)
+}
+
+// Outdated reports whether the installed service definition differs from the
+// one this version writes, for the executable the definition already runs.
+// Comparing with that executable rather than this one means a definition is
+// never outdated merely because another copy of laterr is looking at it.
+// binary is that executable; outdated is false when nothing is installed or
+// the definition cannot be read.
+func Outdated(schedulerLog string) (binary string, outdated bool) {
+	path, err := DefinitionPath()
+	if err != nil {
+		return "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	binary, err = definedBinary(runtime.GOOS, string(data))
+	if err != nil {
+		return "", false
+	}
+	return binary, string(data) != definition(runtime.GOOS, binary, schedulerLog)
 }
 
 // Uninstall stops the scheduler and removes the service definition. removed

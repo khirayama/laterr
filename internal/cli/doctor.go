@@ -63,7 +63,7 @@ func (a *app) doctor(args []string) error {
 		r.ok("Binary", exe)
 	}
 	jobs := checkData(r, p)
-	installed := checkService(r)
+	installed := checkService(r, p)
 	a.checkScheduler(r, p, installed, len(jobs))
 	checkTimeZone(r)
 	checkJobs(r, jobs)
@@ -141,7 +141,7 @@ func checkData(r *report, p paths.Paths) []store.Job {
 
 // checkService checks the service definition and reports whether one is
 // installed.
-func checkService(r *report) (installed bool) {
+func checkService(r *report, p paths.Paths) (installed bool) {
 	if !paths.ServiceManaged() {
 		r.info("Service", fmt.Sprintf("not managed (%s is set; run `laterr daemon` yourself)", paths.HomeEnv))
 		return false
@@ -160,6 +160,10 @@ func checkService(r *report) (installed bool) {
 	} else if fi, err := os.Stat(bin); err != nil || fi.IsDir() {
 		r.bad("Service", fmt.Sprintf("%s runs %s, which does not exist", def, bin))
 		r.hint("It is repaired automatically the next time you schedule a job.")
+	} else if _, outdated := service.Outdated(p.SchedulerLog); outdated {
+		r.warn("Service", fmt.Sprintf("%s (runs %s) was written by an older laterr", def, bin))
+		r.hint("Jobs may run with outdated settings, such as at background priority.\n" +
+			"It is updated the next time you schedule or start a job while none is running.")
 	} else {
 		r.ok("Service", fmt.Sprintf("%s (runs %s)", def, bin))
 	}

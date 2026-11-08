@@ -266,17 +266,19 @@ func protectedDir(dir string) string {
 }
 
 // ensureScheduler makes sure the background scheduler is running, installing
-// the OS service if needed. It returns the path of the service definition if
-// this call created it, and the scheduler that answered.
+// the OS service if needed. A running scheduler whose service definition is
+// outdated is restarted with the new definition, but only while it is idle.
+// It returns the path of the service definition if this call created it, and
+// the scheduler that answered.
 func ensureScheduler(p paths.Paths) (installed string, sched scheduler.Info, err error) {
-	if sched, err := scheduler.Ping(p.Socket); err == nil {
-		return "", sched, nil
-	}
-	if !paths.ServiceManaged() {
+	var binary string
+	if sched, err = scheduler.Ping(p.Socket); err == nil {
+		if binary = outdatedIdleService(p); binary == "" {
+			return "", sched, nil
+		}
+	} else if !paths.ServiceManaged() {
 		return "", sched, fmt.Errorf("%w (%s is set, so start it yourself with `laterr daemon`)", scheduler.ErrUnavailable, paths.HomeEnv)
-	}
-	binary, err := service.BinaryPath()
-	if err != nil {
+	} else if binary, err = service.BinaryPath(); err != nil {
 		return "", sched, fmt.Errorf("%w: %v", scheduler.ErrUnavailable, err)
 	}
 	path, created, err := service.Install(binary, p.SchedulerLog)
@@ -293,4 +295,43 @@ func ensureScheduler(p paths.Paths) (installed string, sched scheduler.Info, err
 		return installed, sched, nil
 	}
 	return installed, sched, errors.New(scheduler.ErrUnavailable.Error() + ": the service was started but is not responding (see `laterr doctor`)")
+}
+
+// restartMargin is how far ahead no job may be due for an outdated scheduler
+// to be restarted: one that starts while the scheduler is being replaced
+// would be interrupted.
+const restartMargin = time.Minute
+
+// outdatedIdleService returns the executable to reinstall the service with
+// when its definition is outdated (an older laterr wrote it, for example one
+// that ran jobs at background priority) and the scheduler can be restarted
+// without interrupting a job: none is running and none is about to start.
+// Otherwise it returns "".
+func outdatedIdleService(p paths.Paths) string {
+	if !paths.ServiceManaged() {
+		return ""
+	}
+	binary, outdated := service.Outdated(p.SchedulerLog)
+	if !outdated {
+		return ""
+	}
+	if fi, err := os.Stat(binary); err != nil || fi.IsDir() {
+		return ""
+	}
+	st, err := openStore(p, false)
+	if err != nil {
+		return ""
+	}
+	if st != nil {
+		defer st.Close()
+		_, running, err := st.CountActive()
+		if err != nil || running > 0 {
+			return ""
+		}
+		next, ok, err := st.NextScheduled()
+		if err != nil || ok && time.Until(next) < restartMargin {
+			return ""
+		}
+	}
+	return binary
 }

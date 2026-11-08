@@ -3,6 +3,9 @@ package service
 import (
 	"encoding/xml"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -88,6 +91,51 @@ func TestDefinedBinaryRoundTrip(t *testing.T) {
 	}
 	if _, err := definedBinary("darwin", "garbage"); err == nil {
 		t.Error("expected an error for an unrecognized definition")
+	}
+}
+
+// A definition written by an older laterr (one that ran jobs at background
+// priority, say) is outdated, but one that only runs another executable is not.
+func TestOutdated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	const bin, log = "/opt/homebrew/bin/laterr", "/tmp/scheduler.log"
+	if _, outdated := Outdated(log); outdated {
+		t.Error("nothing installed: outdated")
+	}
+	path, err := DefinitionPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(def string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(def), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := definition(runtime.GOOS, bin, log)
+	write(current)
+	if got, outdated := Outdated(log); outdated || got != bin {
+		t.Errorf("current definition: %q, outdated %v", got, outdated)
+	}
+	write(definition(runtime.GOOS, "/elsewhere/laterr", log))
+	if got, outdated := Outdated(log); outdated || got != "/elsewhere/laterr" {
+		t.Errorf("other executable: %q, outdated %v", got, outdated)
+	}
+	old := strings.Replace(current, "<string>Interactive</string>", "<string>Background</string>", 1)
+	if runtime.GOOS != "darwin" {
+		old = strings.Replace(current, "RestartSec=1", "RestartSec=5", 1)
+	}
+	write(old)
+	if got, outdated := Outdated(log); !outdated || got != bin {
+		t.Errorf("older definition: %q, outdated %v", got, outdated)
+	}
+	write("garbage")
+	if _, outdated := Outdated(log); outdated {
+		t.Error("unreadable definition: outdated")
 	}
 }
 
